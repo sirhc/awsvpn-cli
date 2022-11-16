@@ -1,0 +1,215 @@
+#!/usr/bin/env zsh
+
+set -euo pipefail
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h | --help)
+                usage
+                exit 0
+                ;;
+            -c | --connect | --connect=*)
+                assert_running
+                assert_disconnected
+                connect "$( parse_profile "$@" )"
+                exit
+                ;;
+            -C | --force-connect | --force-connect=*)
+                assert_running
+                disconnect
+                connect "$( parse_profile "$@" )"
+                exit
+                ;;
+            -d | --disconnect)
+                assert_running
+                disconnect
+                exit
+                ;;
+            -p | --profiles)
+                get_profiles
+                exit 0
+                ;;
+            -r | --running)
+                is_running
+                exit
+                ;;
+            -s | --show)
+                assert_running
+                assert_connected
+                get_connection
+                exit
+                ;;
+            -v | --verbose)
+                verbose() {
+                    print -- "[${ZSH_ARGZERO:t}] $@"
+                }
+                ;;
+            *)
+                error "unknown argument: $1"
+                usage
+                exit 2
+        esac
+
+        shift
+    done
+}
+
+parse_profile() {
+    if [[ $1 == *=* ]]; then
+        print "${1#*=}"
+    elif [[ $# -gt 1 ]]; then
+        print "$2"
+    else
+        error 'missing profile'
+        exit 1
+    fi
+}
+
+verbose() {
+    :
+}
+
+error() {
+    print "error: $*" 1>&2
+}
+
+usage() {
+    cat <<USAGE
+usage: ${ZSH_ARGZERO:t} [<options>] (-c | -C) <profile>
+   or: ${ZSH_ARGZERO:t} [<options>] -d
+   or: ${ZSH_ARGZERO:t} [<options>] -p
+   or: ${ZSH_ARGZERO:t} [<options>] -r
+   or: ${ZSH_ARGZERO:t} [<options>] -s
+
+Generic options
+    -v, --verbose         print the actions being taken
+
+Specific ${ZSH_ARGZERO:t} actions:
+    -c, --connect=<profile>
+                          connect to a profile, if not connected
+    -C, --force-connect=<profile>
+                          connect to a profile, disconnecting if necessary
+    -d, --disconnect      disconnect from a profile
+    -p, --profiles        display the configured profiles
+    -r, --running         exit 0 if running, 1 otherwise
+    -s, --show            show the currently connected profile
+
+USAGE
+}
+
+get_profiles() {
+    # {
+    #   "Version": "1",
+    #   "LastSelectedProfileIndex": 0,
+    #   "ConnectionProfiles": [
+    #     {
+    #       "ProfileName": "Pre-Production",
+    #       "OvpnConfigFilePath": "/Users/chris.grau/.config/AWSVPNClient/OpenVpnConfigs/Pre-Production",
+    #       "CvpnEndpointId": "cvpn-endpoint-05601af5fc5c68260",
+    #       "CvpnEndpointRegion": "us-east-1",
+    #       "CompatibilityVersion": "2",
+    #       "FederatedAuthType": 1
+    #     },
+    #     ...
+    #   ]
+    # }
+
+    while IFS=$'\t' read -r profile file; do
+        # I use fake entries in ConnectionProfiles to implement separator
+        # lines.
+        if [[ -e $file ]]; then
+            print "$profile"
+        fi
+    done < <( jq -r '.ConnectionProfiles[] | [ .ProfileName, .OvpnConfigFilePath ] | @tsv' "${XDG_CONFIG_HOME:-$HOME/.config}/AWSVPNClient/ConnectionProfiles" )
+}
+
+is_running() {
+    local out="$( osascript -e 'tell application "System Events" to (name of processes) contains "AWS VPN Client"' )"
+    [[ "$out" = 'true' ]]
+}
+
+is_connected() {
+    local out="$( osascript -e 'tell application "System Events" to exists button "Disconnect" of window "AWS VPN Client" of process "AWS VPN Client"' )"
+    [[ "$out" = 'true' ]]
+}
+
+assert_running() {
+    if ! is_running; then
+        error 'AWS VPN Client is not running'
+        exit 1
+    fi
+}
+
+assert_connected() {
+    if ! is_connected; then
+        error 'AWS VPN Client is not connected'
+        exit 1
+    fi
+}
+
+assert_disconnected() {
+    if is_connected; then
+        error 'AWS VPN Client is connected'
+        exit 1
+    fi
+}
+
+assert_valid_profile() {
+    local profile="$1"
+
+    if ! get_profiles | grep -- "$profile"; then
+        error "invalid profile: $profile"
+        exit 1
+    fi
+}
+
+get_connection() {
+    osascript -e 'tell application "System Events" to get value of pop up button 1 of window "AWS VPN Client" of process "AWS VPN Client"'
+}
+
+connect() {
+    local profile="$1"
+
+    assert_valid_profile "$profile"
+
+    if is_connected; then
+        verbose 'currently connected'
+        return
+    fi
+
+    verbose "connecting to $profile"
+
+    osascript -e 'tell application "System Events" to tell process "AWS VPN Client"' \
+              -e '    tell pop up button 1 of window "AWS VPN Client"' \
+              -e '        click' \
+              -e '        delay 0.2' \
+              -e '        pick menu item "'"$profile"'" of menu 1' \
+              -e '    end tell' \
+              -e 'end tell' >/dev/null
+
+    osascript -e 'tell application "System Events" to click button "Connect" of window "AWS VPN Client" of process "AWS VPN Client"' >/dev/null
+}
+
+disconnect() {
+    if ! is_connected; then
+        verbose 'not currently connected'
+        return
+    fi
+
+    verbose "disconnecting from $( get_connection )"
+
+    osascript -e 'tell application "System Events" to click button "Disconnect" of window "AWS VPN Client" of process "AWS VPN Client"' >/dev/null
+    osascript -e 'tell application "System Events"' \
+              -e '    repeat until (exists static text "Ready to connect." of window "AWS VPN Client" of application process "AWS VPN Client")' \
+              -e '        delay 1' \
+              -e '    end repeat' \
+              -e 'end tell'
+}
+
+main "$@"
