@@ -135,8 +135,8 @@ is_running() {
 }
 
 is_connected() {
-    local out="$( osascript -e 'tell application "System Events" to exists button "Disconnect" of window "AWS VPN Client" of process "AWS VPN Client"' )"
-    [[ "$out" = 'true' ]]
+    local out="$( osascript -e 'tell application "System Events" to exists static text "None connected" of group 1 of group 1 of window "AWS VPN Client" of process "AWS VPN Client"' )"
+    [[ "$out" = 'false' ]]
 }
 
 assert_running() {
@@ -170,7 +170,19 @@ assert_valid_profile() {
 }
 
 get_connection() {
-    osascript -e 'tell application "System Events" to get value of pop up button 1 of window "AWS VPN Client" of process "AWS VPN Client"'
+    osascript -e 'tell application "System Events"' \
+              -e '    tell process "AWS VPN Client"' \
+              -e '        tell window "AWS VPN Client"' \
+              -e '            repeat with g in groups of list 1 of list 1 of scroll area 2' \
+              -e '                tell group 1 of g' \
+              -e '                    if exists button "Disconnect" then' \
+              -e '                        return value of static text 1' \
+              -e '                    end if' \
+              -e '                end tell' \
+              -e '            end repeat' \
+              -e '        end tell' \
+              -e '    end tell' \
+              -e 'end tell'
 }
 
 connect() {
@@ -185,15 +197,20 @@ connect() {
 
     verbose "connecting to $profile"
 
-    osascript -e 'tell application "System Events" to tell process "AWS VPN Client"' \
-              -e '    tell pop up button 1 of window "AWS VPN Client"' \
-              -e '        click' \
-              -e '        delay 0.2' \
-              -e '        pick menu item "'"$profile"'" of menu 1' \
+    osascript -e 'tell application "System Events"' \
+              -e '    tell process "AWS VPN Client"' \
+              -e '        tell window "AWS VPN Client"' \
+              -e '            repeat with g in groups of list 1 of list 1 of scroll area 1' \
+              -e '                tell group 1 of g' \
+              -e '                    if (value of static text 1) is "'"$profile"'" then' \
+              -e '                        click button "Connect"' \
+              -e '                        exit repeat' \
+              -e '                    end if' \
+              -e '                end tell' \
+              -e '            end repeat' \
+              -e '        end tell' \
               -e '    end tell' \
               -e 'end tell' >/dev/null
-
-    osascript -e 'tell application "System Events" to click button "Connect" of window "AWS VPN Client" of process "AWS VPN Client"' >/dev/null
 }
 
 disconnect() {
@@ -204,12 +221,25 @@ disconnect() {
 
     verbose "disconnecting from $( get_connection )"
 
-    osascript -e 'tell application "System Events" to click button "Disconnect" of window "AWS VPN Client" of process "AWS VPN Client"' >/dev/null
     osascript -e 'tell application "System Events"' \
-              -e '    repeat until (exists static text "Ready to connect." of window "AWS VPN Client" of application process "AWS VPN Client")' \
+              -e '    tell process "AWS VPN Client"' \
+              -e '        tell window "AWS VPN Client"' \
+              -e '            repeat with g in groups of list 1 of list 1 of scroll area 2' \
+              -e '                tell group 1 of g' \
+              -e '                    if exists button "Disconnect" then' \
+              -e '                        click button "Disconnect"' \
+              -e '                        exit repeat' \
+              -e '                    end if' \
+              -e '                end tell' \
+              -e '            end repeat' \
+              -e '        end tell' \
+              -e '    end tell' \
+              -e 'end tell' >/dev/null
+    osascript -e 'tell application "System Events"' \
+              -e '    repeat until (exists static text "None connected" of group 1 of group 1 of window "AWS VPN Client" of application process "AWS VPN Client")' \
               -e '        delay 1' \
               -e '    end repeat' \
-              -e 'end tell'
+              -e 'end tell' >/dev/null
 }
 
 main "$@"
