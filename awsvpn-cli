@@ -163,7 +163,7 @@ assert_disconnected() {
 assert_valid_profile() {
     local profile="$1"
 
-    if ! get_profiles | grep -- "$profile"; then
+    if ! grep -qF -- "$profile" <<< "$(get_profiles)"; then
         error "invalid profile: $profile"
         exit 1
     fi
@@ -186,23 +186,24 @@ get_connection() {
 }
 
 connect() {
-    local profile="$1"
+    local profile="$1" resolved
 
     assert_valid_profile "$profile"
+    resolved="$( grep -m1 -F -- "$profile" <<< "$(get_profiles)" )"
 
     if is_connected; then
         verbose 'currently connected'
         return
     fi
 
-    verbose "connecting to $profile"
+    verbose "connecting to $resolved"
 
     osascript -e 'tell application "System Events"' \
               -e '    tell process "AWS VPN Client"' \
               -e '        tell window "AWS VPN Client"' \
               -e '            repeat with g in groups of list 1 of list 1 of scroll area 1' \
               -e '                tell group 1 of g' \
-              -e '                    if (value of static text 1) is "'"$profile"'" then' \
+              -e '                    if (value of static text 1) is "'"$resolved"'" then' \
               -e '                        click button "Connect"' \
               -e '                        exit repeat' \
               -e '                    end if' \
